@@ -330,7 +330,32 @@ function ToolPanel(props: {
   );
 }
 
-export function ProblemCanvas() {
+const DEFAULT_PROBLEM_TEXT =
+  "次の式を因数分解してください：x² − 5x + 6";
+
+function ProblemHud(props: { text: string }) {
+  return (
+    <div
+      className="pointer-events-none absolute left-1/2 top-20 z-20 w-[min(90vw,28rem)] -translate-x-1/2"
+      role="status"
+      aria-live="polite"
+    >
+      <div className="overflow-hidden rounded-xl border-2 border-zinc-800/70 bg-[#faf7ee]/95 shadow-md ring-1 ring-black/5 backdrop-blur-sm">
+        <p className="px-5 py-4 text-center text-lg font-medium leading-snug text-zinc-900">
+          {props.text}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+export type ProblemCanvasProps = {
+  problemText?: string;
+};
+
+export function ProblemCanvas({
+  problemText = DEFAULT_PROBLEM_TEXT,
+}: ProblemCanvasProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLCanvasElement>(null);
   const inkRef = useRef<HTMLCanvasElement>(null);
@@ -499,6 +524,7 @@ export function ProblemCanvas() {
           }
         }}
       />
+      <ProblemHud text={problemText} />
       {toolMode === "eraser" && eraserCursor != null ? (
         <div
           className="pointer-events-none absolute z-[15] rounded-full border border-zinc-500/30 bg-transparent"
