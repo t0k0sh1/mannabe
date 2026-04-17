@@ -336,8 +336,47 @@ function ToolPanel(props: {
   );
 }
 
-const DEFAULT_PROBLEM_TEXT =
-  "15 + 28 = ？\n答えは半角数字のみで入力してください。";
+const DEFAULT_PROBLEM_TEXT = "15 + 28";
+
+/** First line only; if it contains `=`, use the part before `=` (legacy-friendly). */
+function problemStemFromProp(text: string): string {
+  const first = text.split(/\r?\n/)[0] ?? "";
+  const eq = first.indexOf("=");
+  const stem = (eq >= 0 ? first.slice(0, eq) : first).trim();
+  return stem;
+}
+
+/**
+ * Character columns for the answer (true result digits + 1).
+ * Actual input width is `calc(Nch + gutter)` so padding/border don’t eat glyph space.
+ */
+function answerInputWidthCh(stem: string): number {
+  const t = stem.trim();
+  const add = /^(\d+)\s*\+\s*(\d+)$/.exec(t);
+  if (add) {
+    const n = Number(add[1]) + Number(add[2]);
+    return Math.min(16, Math.max(2, String(n).length + 1));
+  }
+  const sub = /^(\d+)\s*-\s*(\d+)$/.exec(t);
+  if (sub) {
+    const n = Math.abs(Number(sub[1]) - Number(sub[2]));
+    return Math.min(16, Math.max(2, String(n).length + 1));
+  }
+  const mul = /^(\d+)\s*[×*]\s*(\d+)$/.exec(t);
+  if (mul) {
+    const n = Number(mul[1]) * Number(mul[2]);
+    return Math.min(16, Math.max(2, String(n).length + 1));
+  }
+  const nums = t.match(/\d+/g);
+  if (nums?.length) {
+    const maxLen = Math.max(...nums.map((x) => x.length));
+    return Math.min(16, Math.max(2, maxLen + 2));
+  }
+  return 4;
+}
+
+/** Horizontal space outside the `ch` track (padding + border) so 2+ digits fit. */
+const ANSWER_INPUT_WIDTH_GUTTER = "2.25rem";
 
 /** Use in `keypadRows` for a backspace key (label shown as ⌫). */
 export const KEYPAD_BACKSPACE = "__backspace__";
@@ -393,29 +432,34 @@ function ProblemHud(props: {
   text: string;
   answer: string;
   onAnswerChange: (value: string) => void;
+  onSubmitAnswer?: (answer: string) => void;
   keypadRows: string[][];
   digitOnlyAnswer: boolean;
 }) {
   const answerId = useId();
-  const taRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const [tenkeyVisible, setTenkeyVisible] = useState(false);
+  const stem = problemStemFromProp(props.text);
+  const answerWidthCh = answerInputWidthCh(stem);
 
   const normalize = useCallback(
-    (v: string) =>
-      props.digitOnlyAnswer ? v.replace(/\D/g, "") : v,
+    (v: string) => {
+      if (!props.digitOnlyAnswer) return v;
+      return v.normalize("NFKC").replace(/\D/g, "");
+    },
     [props.digitOnlyAnswer],
   );
 
   const insertAtCursor = (raw: string) => {
     const chunk = normalize(raw);
     if (!chunk) return;
-    const el = taRef.current;
+    const el = inputRef.current;
     if (!el) {
       props.onAnswerChange(normalize(props.answer + chunk));
       return;
     }
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? 0;
     const merged = props.answer.slice(0, start) + chunk + props.answer.slice(end);
     const next = normalize(merged);
     props.onAnswerChange(next);
@@ -428,13 +472,13 @@ function ProblemHud(props: {
   };
 
   const backspaceAtCursor = () => {
-    const el = taRef.current;
+    const el = inputRef.current;
     if (!el) {
       props.onAnswerChange(normalize(props.answer.slice(0, -1)));
       return;
     }
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? 0;
     if (start !== end) {
       const next = normalize(
         props.answer.slice(0, start) + props.answer.slice(end),
@@ -458,7 +502,7 @@ function ProblemHud(props: {
 
   const clearAnswer = () => {
     props.onAnswerChange("");
-    requestAnimationFrame(() => taRef.current?.focus());
+    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   const onKeypadKey = (cell: string) => {
@@ -467,37 +511,62 @@ function ProblemHud(props: {
     else insertAtCursor(cell);
   };
 
+  const normalizedAnswer = normalize(props.answer);
+  const canSubmit = props.digitOnlyAnswer
+    ? normalizedAnswer.length > 0
+    : props.answer.trim().length > 0;
+
+  const submitAnswer = () => {
+    if (!canSubmit) return;
+    props.onSubmitAnswer?.(
+      props.digitOnlyAnswer ? normalizedAnswer : props.answer.trim(),
+    );
+  };
+
   return (
-    <div className="pointer-events-auto absolute left-1/2 top-12 z-20 flex w-[min(90vw,28rem)] -translate-x-1/2 flex-col gap-2">
-      <div
-        className="overflow-hidden rounded-xl border-2 border-zinc-800/70 bg-[#faf7ee]/95 shadow-md ring-1 ring-black/5 backdrop-blur-sm"
-        role="status"
-        aria-live="polite"
-      >
-        <p className="whitespace-pre-line px-5 py-4 text-center text-lg font-medium leading-snug text-zinc-900">
-          {props.text}
-        </p>
-      </div>
-      <div className="overflow-hidden rounded-xl border-2 border-zinc-800/70 bg-[#faf7ee]/95 px-4 py-3 shadow-md ring-1 ring-black/5 backdrop-blur-sm">
-        <label
-          htmlFor={answerId}
-          className="mb-2 block text-xs font-semibold uppercase tracking-wide text-zinc-600"
-        >
-          回答
-        </label>
-        <textarea
-          ref={taRef}
-          id={answerId}
-          value={props.answer}
-          onChange={(e) => props.onAnswerChange(normalize(e.target.value))}
-          onFocus={() => setTenkeyVisible(true)}
-          onBlur={() => setTenkeyVisible(false)}
-          rows={1}
-          autoComplete="off"
-          spellCheck={false}
-          className="box-border block min-h-[6.5rem] w-full resize-y rounded-lg border border-zinc-300/90 bg-[#faf7ee]/80 px-4 py-[max(1rem,calc((6.5rem-1lh-2px)/2))] text-3xl font-medium leading-normal tabular-nums text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-400"
-          placeholder="数字を入力…"
-        />
+    <div className="pointer-events-auto absolute left-1/2 top-12 z-30 w-[min(90vw,28rem)] -translate-x-1/2">
+      <div className="overflow-hidden rounded-xl border-2 border-zinc-800/70 bg-[#faf7ee]/95 px-4 py-4 shadow-md ring-1 ring-black/5 backdrop-blur-sm">
+        <div className="flex flex-wrap items-center justify-center gap-x-2 text-center text-zinc-900">
+          <span className="text-4xl font-medium leading-snug tabular-nums">
+            {stem}
+          </span>
+          <span className="text-4xl font-medium leading-snug" aria-hidden>
+            {"="}
+          </span>
+          <div className="flex items-center gap-2">
+            <input
+              ref={inputRef}
+              id={answerId}
+              type="text"
+              inputMode={props.digitOnlyAnswer ? "numeric" : "text"}
+              value={props.answer}
+              onChange={(e) => props.onAnswerChange(normalize(e.target.value))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  submitAnswer();
+                }
+              }}
+              onFocus={() => setTenkeyVisible(true)}
+              onBlur={() => setTenkeyVisible(false)}
+              autoComplete="off"
+              spellCheck={false}
+              aria-label="答え"
+              style={{
+                width: `calc(${answerWidthCh}ch + ${ANSWER_INPUT_WIDTH_GUTTER})`,
+              }}
+              className="box-border h-12 shrink-0 rounded-md border border-zinc-300/90 bg-[#faf7ee]/80 px-2 text-right text-4xl font-medium tabular-nums leading-none text-zinc-900 focus:border-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-400"
+            />
+            <button
+              type="button"
+              disabled={!canSubmit}
+              onClick={submitAnswer}
+              className="inline-flex h-12 shrink-0 items-center justify-center rounded-md border border-zinc-700 bg-zinc-800 px-5 text-lg font-semibold text-[#faf7ee] shadow-sm transition hover:bg-zinc-700 disabled:pointer-events-none disabled:border-zinc-300 disabled:bg-zinc-200 disabled:text-zinc-400"
+            >
+              回答
+            </button>
+          </div>
+        </div>
         {tenkeyVisible ? (
           <ProblemTenkey rows={props.keypadRows} onKey={onKeypadKey} />
         ) : null}
@@ -512,12 +581,15 @@ export type ProblemCanvasProps = {
   keypadRows?: string[][];
   /** When true, only ASCII digits are kept (handwriting / paste included). */
   digitOnlyAnswer?: boolean;
+  /** Called when the user submits an answer (button or Enter). */
+  onSubmitAnswer?: (answer: string) => void;
 };
 
 export function ProblemCanvas({
   problemText = DEFAULT_PROBLEM_TEXT,
   keypadRows = DEFAULT_KEYPAD_ROWS,
   digitOnlyAnswer = true,
+  onSubmitAnswer,
 }: ProblemCanvasProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLCanvasElement>(null);
@@ -581,12 +653,12 @@ export function ProblemCanvas({
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
 
+    if (!isDrawingPointer(e.pointerType)) return;
+
     const active = document.activeElement;
     if (active instanceof HTMLElement) {
       active.blur();
     }
-
-    if (!isDrawingPointer(e.pointerType)) return;
 
     e.preventDefault();
     const ink = inkRef.current;
@@ -680,7 +752,7 @@ export function ProblemCanvas({
       />
       <canvas
         ref={inkRef}
-        className="absolute inset-0 block h-full w-full touch-none"
+        className="absolute inset-0 z-10 block h-full w-full touch-none"
         style={{ touchAction: "none" }}
         onPointerDown={onPointerDown}
         onPointerEnter={(e) => updateEraserCursorFromEvent(e)}
@@ -698,6 +770,7 @@ export function ProblemCanvas({
         text={problemText}
         answer={answer}
         onAnswerChange={setAnswer}
+        onSubmitAnswer={onSubmitAnswer}
         keypadRows={keypadRows}
         digitOnlyAnswer={digitOnlyAnswer}
       />
