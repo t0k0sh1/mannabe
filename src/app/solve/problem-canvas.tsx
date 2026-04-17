@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 /** Visual tuning — minor (1 cell) < mid (5) < major (10) */
 const PAPER_COLOR = "#faf7ee";
@@ -331,19 +337,170 @@ function ToolPanel(props: {
 }
 
 const DEFAULT_PROBLEM_TEXT =
-  "次の式を因数分解してください：x² − 5x + 6";
+  "15 + 28 = ？\n答えは半角数字のみで入力してください。";
 
-function ProblemHud(props: { text: string }) {
+/** Use in `keypadRows` for a backspace key (label shown as ⌫). */
+export const KEYPAD_BACKSPACE = "__backspace__";
+/** Use in `keypadRows` to clear the whole answer (label shown as C). */
+export const KEYPAD_CLEAR = "__clear__";
+
+const DEFAULT_KEYPAD_ROWS: string[][] = [
+  ["7", "8", "9"],
+  ["4", "5", "6"],
+  ["1", "2", "3"],
+  ["0", KEYPAD_BACKSPACE],
+];
+
+function keypadButtonLabel(cell: string): string {
+  if (cell === KEYPAD_BACKSPACE) return "⌫";
+  if (cell === KEYPAD_CLEAR) return "C";
+  return cell;
+}
+
+function ProblemTenkey(props: {
+  rows: string[][];
+  onKey: (cell: string) => void;
+}) {
   return (
     <div
-      className="pointer-events-none absolute left-1/2 top-20 z-20 w-[min(90vw,28rem)] -translate-x-1/2"
-      role="status"
-      aria-live="polite"
+      role="group"
+      aria-label="テンキー"
+      className="mt-2 rounded-xl border border-zinc-300/80 bg-zinc-100/70 p-2 shadow-inner"
     >
-      <div className="overflow-hidden rounded-xl border-2 border-zinc-800/70 bg-[#faf7ee]/95 shadow-md ring-1 ring-black/5 backdrop-blur-sm">
-        <p className="px-5 py-4 text-center text-lg font-medium leading-snug text-zinc-900">
+      {props.rows.map((row, ri) => (
+        <div
+          key={ri}
+          className="mb-2 flex flex-wrap justify-center gap-2 last:mb-0"
+        >
+          {row.map((cell, ci) => (
+            <button
+              key={`${ri}-${ci}-${cell}`}
+              type="button"
+              className="min-h-[3.25rem] min-w-[4.25rem] touch-manipulation rounded-xl border border-zinc-400/80 bg-[#faf7ee] px-3 text-2xl font-semibold tabular-nums text-zinc-900 shadow-sm active:scale-[0.97] active:bg-zinc-200/90 sm:min-w-[4.5rem] sm:text-[1.65rem]"
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={() => props.onKey(cell)}
+            >
+              {keypadButtonLabel(cell)}
+            </button>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ProblemHud(props: {
+  text: string;
+  answer: string;
+  onAnswerChange: (value: string) => void;
+  keypadRows: string[][];
+  digitOnlyAnswer: boolean;
+}) {
+  const answerId = useId();
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const [tenkeyVisible, setTenkeyVisible] = useState(false);
+
+  const normalize = useCallback(
+    (v: string) =>
+      props.digitOnlyAnswer ? v.replace(/\D/g, "") : v,
+    [props.digitOnlyAnswer],
+  );
+
+  const insertAtCursor = (raw: string) => {
+    const chunk = normalize(raw);
+    if (!chunk) return;
+    const el = taRef.current;
+    if (!el) {
+      props.onAnswerChange(normalize(props.answer + chunk));
+      return;
+    }
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const merged = props.answer.slice(0, start) + chunk + props.answer.slice(end);
+    const next = normalize(merged);
+    props.onAnswerChange(next);
+    const newPos = start + chunk.length;
+    requestAnimationFrame(() => {
+      el.focus();
+      const pos = Math.min(newPos, next.length);
+      el.setSelectionRange(pos, pos);
+    });
+  };
+
+  const backspaceAtCursor = () => {
+    const el = taRef.current;
+    if (!el) {
+      props.onAnswerChange(normalize(props.answer.slice(0, -1)));
+      return;
+    }
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    if (start !== end) {
+      const next = normalize(
+        props.answer.slice(0, start) + props.answer.slice(end),
+      );
+      props.onAnswerChange(next);
+      requestAnimationFrame(() => {
+        el.focus();
+        el.setSelectionRange(start, start);
+      });
+    } else if (start > 0) {
+      const next = normalize(
+        props.answer.slice(0, start - 1) + props.answer.slice(end),
+      );
+      props.onAnswerChange(next);
+      requestAnimationFrame(() => {
+        el.focus();
+        el.setSelectionRange(start - 1, start - 1);
+      });
+    }
+  };
+
+  const clearAnswer = () => {
+    props.onAnswerChange("");
+    requestAnimationFrame(() => taRef.current?.focus());
+  };
+
+  const onKeypadKey = (cell: string) => {
+    if (cell === KEYPAD_BACKSPACE) backspaceAtCursor();
+    else if (cell === KEYPAD_CLEAR) clearAnswer();
+    else insertAtCursor(cell);
+  };
+
+  return (
+    <div className="pointer-events-auto absolute left-1/2 top-12 z-20 flex w-[min(90vw,28rem)] -translate-x-1/2 flex-col gap-2">
+      <div
+        className="overflow-hidden rounded-xl border-2 border-zinc-800/70 bg-[#faf7ee]/95 shadow-md ring-1 ring-black/5 backdrop-blur-sm"
+        role="status"
+        aria-live="polite"
+      >
+        <p className="whitespace-pre-line px-5 py-4 text-center text-lg font-medium leading-snug text-zinc-900">
           {props.text}
         </p>
+      </div>
+      <div className="overflow-hidden rounded-xl border-2 border-zinc-800/70 bg-[#faf7ee]/95 px-4 py-3 shadow-md ring-1 ring-black/5 backdrop-blur-sm">
+        <label
+          htmlFor={answerId}
+          className="mb-2 block text-xs font-semibold uppercase tracking-wide text-zinc-600"
+        >
+          回答
+        </label>
+        <textarea
+          ref={taRef}
+          id={answerId}
+          value={props.answer}
+          onChange={(e) => props.onAnswerChange(normalize(e.target.value))}
+          onFocus={() => setTenkeyVisible(true)}
+          onBlur={() => setTenkeyVisible(false)}
+          rows={1}
+          autoComplete="off"
+          spellCheck={false}
+          className="box-border block min-h-[6.5rem] w-full resize-y rounded-lg border border-zinc-300/90 bg-[#faf7ee]/80 px-4 py-[max(1rem,calc((6.5rem-1lh-2px)/2))] text-3xl font-medium leading-normal tabular-nums text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-400"
+          placeholder="数字を入力…"
+        />
+        {tenkeyVisible ? (
+          <ProblemTenkey rows={props.keypadRows} onKey={onKeypadKey} />
+        ) : null}
       </div>
     </div>
   );
@@ -351,10 +508,16 @@ function ProblemHud(props: { text: string }) {
 
 export type ProblemCanvasProps = {
   problemText?: string;
+  /** Keypad layout per problem: each row is a list of key labels, or KEYPAD_* tokens. */
+  keypadRows?: string[][];
+  /** When true, only ASCII digits are kept (handwriting / paste included). */
+  digitOnlyAnswer?: boolean;
 };
 
 export function ProblemCanvas({
   problemText = DEFAULT_PROBLEM_TEXT,
+  keypadRows = DEFAULT_KEYPAD_ROWS,
+  digitOnlyAnswer = true,
 }: ProblemCanvasProps = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLCanvasElement>(null);
@@ -370,6 +533,7 @@ export function ProblemCanvas({
     x: number;
     y: number;
   } | null>(null);
+  const [answer, setAnswer] = useState("");
 
   const syncSize = useCallback(() => {
     const container = containerRef.current;
@@ -415,8 +579,14 @@ export function ProblemCanvas({
   };
 
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!isDrawingPointer(e.pointerType)) return;
     if (e.pointerType === "mouse" && e.button !== 0) return;
+
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) {
+      active.blur();
+    }
+
+    if (!isDrawingPointer(e.pointerType)) return;
 
     e.preventDefault();
     const ink = inkRef.current;
@@ -524,7 +694,13 @@ export function ProblemCanvas({
           }
         }}
       />
-      <ProblemHud text={problemText} />
+      <ProblemHud
+        text={problemText}
+        answer={answer}
+        onAnswerChange={setAnswer}
+        keypadRows={keypadRows}
+        digitOnlyAnswer={digitOnlyAnswer}
+      />
       {toolMode === "eraser" && eraserCursor != null ? (
         <div
           className="pointer-events-none absolute z-[15] rounded-full border border-zinc-500/30 bg-transparent"
