@@ -30,6 +30,11 @@ export default function Home() {
             Canvas demo
           </Link>
         </li>
+        <li>
+          <Link className="font-medium text-zinc-900 underline dark:text-zinc-100" href="/solve">
+            Solve (grid canvas)
+          </Link>
+        </li>
       </ul>
     </main>
   );
